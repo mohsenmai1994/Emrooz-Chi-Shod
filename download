@@ -1,0 +1,9 @@
+# Never commit secrets or local environments.
+.env
+settings.json
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+*.tmp
