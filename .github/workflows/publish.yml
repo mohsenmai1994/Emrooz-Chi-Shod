@@ -1,0 +1,49 @@
+name: Publish one news item
+
+# The schedule is managed EXCLUSIVELY by cron-job.org.
+# cron-job.org calls the GitHub API to fire workflow_dispatch.
+# There is intentionally NO GitHub schedule/cron trigger.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # Needed to store posted article IDs in state.json.
+
+concurrency:
+  group: emroozchishod-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check RSS and publish at most one news item
+        env:
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          BALE_CHANNEL: ${{ vars.BALE_CHANNEL }}
+          MAX_AGE_HOURS: "3"
+          ECONOMY_ONLY: "true"
+        run: python main.py
+
+      - name: Save published news history
+        run: |
+          if ! git diff --quiet -- state.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: record published news [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "No changes in news history."
+          fi
