@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from bale import format_post, send_post
 from config import FEEDS, get_settings
-from feeds import discover_article_image, fetch_feed, fingerprint_keys, is_economic
+from feeds import fetch_article_details, fetch_feed, fingerprint_keys, is_economic, summarize_news
 from state import load_history, save_history
 
 
@@ -50,11 +50,18 @@ def run_once(settings):
 
     # One story at most, even if RSS feeds contain hundreds of articles.
     selected = max(candidates, key=lambda item: item["published"])
-    if not selected["photo"]:
-        try:
-            selected["photo"] = discover_article_image(selected["link"])
-        except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, ValueError) as exc:
-            print(f"[WARN] Image lookup failed: {type(exc).__name__}")
+
+    # Fetch the selected article only (never all RSS entries). This supplies a
+    # complete lead when the RSS description ends in the middle of a sentence.
+    rss_summary = summarize_news(selected["summary"])
+    try:
+        details = fetch_article_details(selected["link"])
+        selected["summary"] = details["summary"] or rss_summary
+        selected["photo"] = selected["photo"] or details["photo"]
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, ValueError) as exc:
+        print(f"[WARN] Article details unavailable: {type(exc).__name__}")
+        # A missing complete summary is safer than publishing a broken phrase.
+        selected["summary"] = rss_summary
 
     if settings["preview"]:
         print("[PREVIEW] No message was sent.\n")

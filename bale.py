@@ -5,7 +5,7 @@ import re
 import urllib.error
 import urllib.request
 
-from feeds import clean_html, normalized
+from feeds import normalized, summarize_news
 
 API_ROOT = "https://tapi.bale.ai/bot"
 
@@ -19,9 +19,7 @@ class BaleAPIError(Exception):
 def format_post(article):
     """Render one compact post; avoid visual separators and raw long URLs."""
     title = re.sub(r"[*_`\[\]]", "", article["title"]).strip()
-    summary = re.sub(r"[*_`\[\]]", "", clean_html(article["summary"]))
-    if len(summary) > 260:
-        summary = summary[:260].rsplit(" ", 1)[0].rstrip("،؛. ") + "…"
+    summary = re.sub(r"[*_`\[\]]", "", summarize_news(article["summary"]))
     if normalized(summary) == normalized(title):
         summary = ""
     source = article["source"]

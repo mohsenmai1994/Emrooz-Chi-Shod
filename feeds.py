@@ -176,3 +176,136 @@ def fingerprint_keys(article):
         hashlib.sha256(("url:" + link).encode("utf-8")).hexdigest(),
         hashlib.sha256(("title:" + heading).encode("utf-8")).hexdigest(),
     ]
+
+
+# Remove editorial datelines such as "Yazd - IRNA -" from article leads.
+NEWS_AGENCIES = r"(?:ایرنا|ایسنا|خبرگزاری\s+مهر|مهر|باشگاه\s+خبرنگاران(?:\s+جوان)?)"
+DATELINE_PATTERN = re.compile(
+    rf"^\s*(?:[\u0600-\u06FF\u200c\s]{{2,42}}\s*[-–—ـ]\s*)?{NEWS_AGENCIES}\s*[-–—ـ:]\s*"
+)
+REPORTER_PATTERN = re.compile(
+    rf"^\s*(?:به\s+گزارش\s+(?:(?:خبرنگار|گروه\s+خبری)\s+)?{NEWS_AGENCIES})\s*[,،:]?\s*"
+)
+SENTENCE_END_PATTERN = re.compile(r"[.!؟!]+(?=\s|$)")
+ELLIPSIS_PATTERN = re.compile(r"…|\.\.\.")
+ARTICLE_CONTENT_PATTERN = re.compile(
+    r"(?:^|[\s_-])(?:item[-_ ]?text|item[-_ ]?summary|article[-_ ]?(?:body|content|text)|"
+    r"news[-_ ]?(?:body|content|text|detail)|story[-_ ]?body|text[-_ ]?body|lead)(?:$|[\s_-])",
+    re.IGNORECASE,
+)
+
+
+def clean_news_lead(value):
+    """Remove news-agency datelines without changing the news itself."""
+    text = clean_html(value)
+    for pattern in (DATELINE_PATTERN, REPORTER_PATTERN):
+        text = pattern.sub("", text, count=1)
+    return text.strip()
+
+
+def summarize_news(value, max_chars=480, max_sentences=2):
+    """Return complete sentences, never a mid-word or mid-sentence cutoff.
+
+    An RSS description ending with an ellipsis is treated as incomplete. The
+    caller should fetch the selected article's page to obtain a proper lead.
+    """
+    text = clean_news_lead(value)
+    if not text:
+        return ""
+
+    # Drop a publisher-truncated trailing fragment, retaining any full sentences.
+    ellipsis = ELLIPSIS_PATTERN.search(text)
+    if ellipsis:
+        text = text[:ellipsis.start()].rstrip()
+
+    ends = list(SENTENCE_END_PATTERN.finditer(text))
+    if not ends:
+        return ""
+
+    output = ""
+    for match in ends[:max_sentences]:
+        candidate = text[:match.end()].strip()
+        if len(candidate) > max_chars:
+            break
+        output = candidate
+    return output
+
+
+class ArticleHTML(HTMLParser):
+    """Capture article-body paragraphs, social preview metadata and lead text."""
+
+    VOID_TAGS = {"meta", "link", "img", "br", "hr", "input", "source", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.paragraphs = []
+        self.description = ""
+        self.photo = ""
+        self._paragraph = None
+        self._priority = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "meta":
+            key = (attrs.get("property") or attrs.get("name") or "").lower()
+            if key in ("og:description", "twitter:description", "description") and not self.description:
+                self.description = attrs.get("content", "")
+            if key in ("og:image", "og:image:secure_url", "twitter:image") and not self.photo:
+                self.photo = attrs.get("content", "")
+
+        if tag == "p":
+            self._paragraph = []
+            parents = self.stack
+            if any(t == "article" for t, _ in parents):
+                self._priority = 2
+            elif any(ARTICLE_CONTENT_PATTERN.search(css) for _, css in parents):
+                self._priority = 1
+            else:
+                self._priority = 0
+
+        if tag not in self.VOID_TAGS:
+            self.stack.append((tag, attrs.get("class", "")))
+
+    def handle_data(self, data):
+        if self._paragraph is not None and not any(t in ("script", "style") for t, _ in self.stack):
+            self._paragraph.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "p" and self._paragraph is not None:
+            value = re.sub(r"\s+", " ", " ".join(self._paragraph)).strip()
+            if len(value) >= 60:
+                self.paragraphs.append((self._priority, value))
+            self._paragraph = None
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == tag:
+                del self.stack[i:]
+                break
+
+
+def fetch_article_details(article_url):
+    """Read only the chosen article page for a complete lead and optional image."""
+    req = urllib.request.Request(article_url, headers={**HEADERS, "Accept": "text/html"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
+        content = response.read(900_000)
+        charset = response.headers.get_content_charset() or "utf-8"
+    parser = ArticleHTML()
+    parser.feed(content.decode(charset, errors="replace"))
+
+    # A short article-body extract is better than the commonly truncated RSS lead.
+    full_summary = ""
+    for priority in (2, 1):
+        matches = [text for score, text in parser.paragraphs if score == priority]
+        for text in matches[:4]:
+            full_summary = summarize_news(text)
+            if full_summary:
+                break
+        if full_summary:
+            break
+    if not full_summary:
+        full_summary = summarize_news(parser.description)
+
+    return {
+        "summary": full_summary,
+        "photo": valid_url(parser.photo, article_url) if parser.photo else "",
+    }

@@ -66,6 +66,9 @@ For a one-shot local real send, set the environment variables `BALE_BOT_TOKEN` a
 - The scheduler calls the workflow every five minutes, but **each execution checks once and exits**.
 - Fetches RSS feeds from Mehr, ISNA, IRNA and YJC.
 - Chooses **at most one** recent article based on date, economic keywords, and posted history.
+- Fetches the **selected article page only** to extract a complete, short lead when RSS contains truncated text.
+- Removes publisher datelines such as `یزد- ایرنا-` from the post body (the source credit remains).
+- Uses full sentences instead of cutting at an arbitrary character count. If a reliable complete lead cannot be obtained, it omits the lead rather than publishing a broken phrase.
 - Sends the image with caption when available, otherwise sends a text post.
 - If no eligible new article exists, sends nothing.
 - Posts a link to the source article and attributes the publisher.
